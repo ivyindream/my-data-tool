@@ -1,77 +1,93 @@
 """
-数据处理工作台 - 首页
-基于 Streamlit 构建，支持多页面扩展
+数据处理工具 - Streamlit Web 应用
+模块化架构，支持扩展新功能
 """
-
 import streamlit as st
+import importlib
 
-APP_TITLE = "数据处理工作台"
+from modules import get_module_list, get_module_config
+from utils.style import config_page, apply_custom_css
 
 
-def main():
-    st.set_page_config(
-        page_title=APP_TITLE,
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded",
+# ============ 页面初始化 ============
+config_page()
+apply_custom_css()
+
+
+# ============ 侧边栏导航 ============
+def render_sidebar():
+    """渲染侧边栏"""
+    st.sidebar.markdown("""
+    <div style="text-align: center; padding: 20px 0;">
+        <h2>📊 数据处理工具</h2>
+        <p style="color: #666; font-size: 14px;">让数据处理更简单</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.sidebar.markdown("---")
+
+    # 获取所有模块
+    modules = get_module_list()
+
+    # 模块选择（默认选择第一个）
+    module_keys = list(modules.keys())
+    module_names = [f"{modules[k]['icon']} {modules[k]['name']}" for k in module_keys]
+
+    # 如果没有选择，默认为第一个
+    if 'selected_module' not in st.session_state:
+        st.session_state.selected_module = module_keys[0] if module_keys else None
+
+    # 渲染模块列表
+    selected = st.sidebar.radio(
+        "选择功能模块",
+        module_keys,
+        format_func=lambda k: f"{modules[k]['icon']} {modules[k]['name']}",
+        index=module_keys.index(st.session_state.selected_module) if st.session_state.selected_module in module_keys else 0
     )
 
-    # ---------- 首页内容 ----------
-    st.title(f"📊 {APP_TITLE}")
-    st.markdown("---")
+    st.session_state.selected_module = selected
 
-    st.markdown("""
-    ### 欢迎使用数据处理工作台
+    st.sidebar.markdown("---")
 
-    请从左侧 **页面列表** 选择需要使用的工具。
+    # 管理员模式提示
+    st.sidebar.markdown("""
+    <div style="padding: 10px; background: #E3F2FD; border-radius: 8px; font-size: 12px;">
+        <b>💡 隐私说明</b><br>
+        普通模式下，所有数据仅在内存中处理，关闭网页后自动删除。<br>
+        如需管理员功能，请访问 <code>?admin=true</code>
+    </div>
+    """, unsafe_allow_html=True)
 
-    ---
-
-    #### 当前可用模块
-    """)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.info("📊 **采购数据合并工具**")
-        st.markdown(
-            "将多个省份的采购数据文件，按照统一的列名映射表，"
-            "自动合并为一张汇总表。支持 ZIP 上传、高级筛选、数据质量报告。"
-        )
-
-    with col2:
-        st.info("🔐 **管理员区域**")
-        st.markdown(
-            "受密码保护的管理员功能区，可上传持久化映射表，"
-            "修改密码等配置。"
-        )
-
-    st.markdown("---")
-
-    st.markdown("""
-    #### 💡 提示
-
-    - 数据仅在当前会话中存在，**关闭页面后自动清除**
-    - 后续可在此平台上扩展更多工作模块
-    - 如需调整页面样式，可本地运行预览后再部署
-    """)
-
-    with st.expander("🖥️ 如何本地预览（边改边看效果）"):
-        st.markdown("""
-        如果你想调整页面视觉样式，建议先在**本地运行预览**：
-
-        1. 下载所有文件到本地同一文件夹
-        2. 安装依赖：`pip install streamlit pandas openpyxl xlrd`
-        3. 进入该文件夹，执行：`streamlit run app.py`
-        4. 浏览器会自动打开 `http://localhost:8501`
-        5. **每次修改代码并保存，浏览器会自动刷新**，立即看到效果
-
-        完全满意后，再将文件上传到 GitHub 部署到云端。
-        """)
-
-    st.markdown("---")
-    st.caption("Powered by Streamlit")
+    return selected
 
 
+# ============ 主函数 ============
+def main():
+    """主函数"""
+    # 渲染侧边栏
+    selected_module = render_sidebar()
+
+    # 加载并渲染选中模块
+    if selected_module:
+        config = get_module_config(selected_module)
+
+        if config:
+            try:
+                # 动态导入模块
+                module = importlib.import_module(config['module'])
+                render_func = getattr(module, config['function'])
+
+                # 调用渲染函数
+                render_func()
+
+            except Exception as e:
+                st.error(f"加载模块失败: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+        else:
+            st.error("模块配置不存在")
+
+
+# ============ 入口 ============
 if __name__ == "__main__":
     main()
