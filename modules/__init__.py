@@ -9,14 +9,16 @@ MODULES = {
         'name': '数据合并',
         'icon': '📋',
         'module': 'modules.data_merger',
-        'function': 'render'
+        'function': 'render',
+        'admin_only': True  # 管理员专属模块
     },
     # 【新增模块示例】
     # 'new_module': {
     #     'name': '新模块名称',
     #     'icon': '🔧',
     #     'module': 'modules.new_module',
-    #     'function': 'render'
+    #     'function': 'render',
+    #     'admin_only': False  # 公开模块
     # },
 }
 
