@@ -1,17 +1,16 @@
 """
 数据合并工作流模块
-将多个 Excel 文件按映射表统一列名后合并
+将多个 Excel 文件按映射表统一列名后合并，并支持信息匹配数据簿
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
-from io import BytesIO
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.file_handler import bytes_to_df, df_to_bytes, excel_to_bytes_multi_sheet
+from utils.file_handler import bytes_to_df, df_to_bytes, excel_to_bytes_multi_sheet, excel_to_df_multi_sheet
 
 
 def render():
@@ -23,9 +22,10 @@ def render():
     st.markdown("""
     ### 使用步骤
     1. **上传映射表** - 上传列标题名称对照表（Excel文件）
-    2. **上传数据文件** - 上传要合并的 Excel 文件（支持多选）
-    3. **开始处理** - 点击按钮执行合并
-    4. **下载结果** - 下载汇总表和质量报告
+    2. **上传信息匹配数据簿（可选）** - 上传包含补充信息的Excel，按Sheet第一列匹配
+    3. **上传数据文件** - 上传要合并的 Excel 文件（支持多选）
+    4. **开始处理** - 点击按钮执行合并
+    5. **下载结果** - 下载汇总表和质量报告
     """)
 
     st.markdown("---")
@@ -54,9 +54,92 @@ def render():
         st.info("👆 请先上传映射表文件")
         return
 
+    # ========== 第1.5步：上传信息匹配数据簿（可选）============
+    st.markdown("---")
+    st.subheader("📚 第2步：上传信息匹配数据簿（可选）")
+
+    info_book_file = st.file_uploader(
+        "上传信息匹配数据簿",
+        type=['xlsx', 'xls'],
+        help="数据簿中每个sheet的第一列列名应与映射表标准列对应，用于匹配产品/项目名称"
+    )
+
+    info_book_sheets = {}  # 存储读取的sheet数据
+    selected_sheets = []  # 用户选择的sheet列表
+
+    if info_book_file:
+        try:
+            info_book_data = info_book_file.getvalue()
+            info_book_sheets = excel_to_df_multi_sheet(info_book_data, info_book_file.name)
+
+            if info_book_sheets:
+                st.success(f"✅ 信息匹配数据簿已加载，共 {len(info_book_sheets)} 个工作表")
+
+                # 先构建映射表的标准列名（用于验证匹配）
+                alias_to_standard, standard_columns = build_mapping(mapping_df)
+
+                # 显示sheet列表供选择，并标注哪些能匹配
+                sheet_options = list(info_book_sheets.keys())
+
+                # 检查每个Sheet是否能匹配
+                sheet_status = {}
+                for sheet_name in sheet_options:
+                    df_preview = info_book_sheets[sheet_name].copy()
+                    df_preview.columns = [str(col).strip() for col in df_preview.columns]
+                    key_col_name = df_preview.columns[0] if len(df_preview.columns) > 0 else ""
+
+                    if key_col_name in standard_columns:
+                        sheet_status[sheet_name] = "✅ 可匹配"
+                    else:
+                        sheet_status[sheet_name] = f"⚠️ 列名「{key_col_name}」不在映射表标准列中，无法匹配"
+
+                # 显示匹配状态
+                st.markdown("**📋 Sheet匹配状态：**")
+                for sheet_name, status in sheet_status.items():
+                    if "✅" in status:
+                        st.write(f"  {sheet_name}: {status}")
+                    else:
+                        st.warning(f"  {sheet_name}: {status}")
+
+                # 只允许选择能匹配的Sheet
+                valid_sheets = [s for s in sheet_options if sheet_status[s].startswith("✅")]
+                if not valid_sheets:
+                    st.warning("⚠️ 没有Sheet能与映射表标准列匹配，将跳过信息匹配步骤")
+                    selected_sheets = []
+                else:
+                    if len(valid_sheets) > 5:
+                        valid_sheets = valid_sheets[:5]
+                        st.info("ℹ️ 最多支持5个Sheet进行匹配，已自动选择前5个")
+
+                    selected_sheets = st.multiselect(
+                        f"选择要匹配的Sheet（已验证可匹配，共 {len(valid_sheets)} 个）",
+                        options=valid_sheets,
+                        default=valid_sheets,
+                        help="只有Sheet第一列列名与映射表标准列匹配的才会显示"
+                    )
+
+                # 预览每个选中sheet的内容
+                if selected_sheets:
+                    with st.expander("📋 查看选中Sheet的预览"):
+                        for sheet_name in selected_sheets:
+                            df_preview = info_book_sheets[sheet_name].copy()
+                            df_preview.columns = [str(col).strip() for col in df_preview.columns]
+                            key_col_name = df_preview.columns[0]
+                            info_cols = list(df_preview.columns[1:])
+                            st.markdown(f"**Sheet: {sheet_name}** (共 {len(df_preview)} 行)")
+                            st.markdown(f"🔑 **关键字列: `{key_col_name}`** → 将用此列匹配映射表中的标准列")
+                            if info_cols:
+                                st.markdown(f"📝 **补充信息列: `{', '.join(info_cols)}`**")
+                            st.dataframe(df_preview.head(5))
+                            st.markdown("---")
+            else:
+                st.warning("⚠️ 数据簿中没有找到有效的工作表")
+        except Exception as e:
+            st.warning(f"⚠️ 读取信息匹配数据簿失败: {e}，将跳过信息匹配步骤")
+
     # ========== 第2步：上传数据文件 ==========
     st.markdown("---")
-    st.subheader("📤 第2步：上传数据文件")
+    st.subheader("📤 第3步：上传数据文件")
 
     data_files = st.file_uploader(
         "上传要合并的 Excel 文件（可多选）",
@@ -86,16 +169,6 @@ def render():
             help="文件名中包含这些关键词的文件将被排除"
         )
 
-        st.markdown("""
-        **省份名称**：为所有数据统一添加省份名称
-        """)
-        add_province = st.text_input(
-            "统一省份名称（可选）",
-            value="",
-            placeholder="例如：湖南",
-            help="输入后会在所有数据前添加省份列"
-        )
-
     # ========== 第4步：执行合并 ==========
     st.markdown("---")
 
@@ -112,6 +185,9 @@ def render():
                 # 处理排除关键词
                 exclude_list = [k.strip() for k in exclude_keywords.split(',') if k.strip()]
 
+                # 构建信息匹配字典（传入标准列名进行验证）
+                info_dict, info_columns = build_info_dict(info_book_sheets, selected_sheets, standard_columns)
+
                 # 处理文件
                 all_data = []
                 quality_report = []
@@ -125,24 +201,35 @@ def render():
                                 '状态': '已排除',
                                 '行数': '-',
                                 '匹配列数': '-',
+                                '信息匹配': '-',
                                 '问题': '文件名包含排除关键词'
                             })
                             continue
 
                     try:
                         df = bytes_to_df(f.getvalue(), f.name)
-                        result, issues = process_single_file(
-                            df, f.name, alias_to_standard, standard_columns, add_province
+                        result, matched_sheets, issues = process_single_file(
+                            df, f.name, alias_to_standard, standard_columns,
+                            info_dict, info_columns
                         )
 
                         if result is not None and not result.empty:
+                            # 添加数据源列（文件名 + Sheet名称）
+                            source_name = matched_sheets if matched_sheets else ''
+                            if source_name:
+                                source_name = f"{f.name} > {source_name}"
+                            if '数据源' not in result.columns:
+                                result.insert(len(result.columns), '数据源', source_name)
+
                             all_data.append(result)
 
+                        matched_sheets_display = matched_sheets if matched_sheets else '❌ 未匹配'
                         quality_report.append({
                             '文件': f.name,
                             '状态': '✅ 成功' if not issues else '⚠️ 部分成功',
                             '行数': len(df),
                             '匹配列数': len([c for c in standard_columns if c in result.columns]) if result is not None else 0,
+                            '信息匹配': matched_sheets_display,
                             '问题': '; '.join(issues) if issues else '无'
                         })
 
@@ -152,6 +239,7 @@ def render():
                             '状态': '❌ 失败',
                             '行数': 0,
                             '匹配列数': 0,
+                            '信息匹配': '-',
                             '问题': str(e)
                         })
 
@@ -159,8 +247,10 @@ def render():
                 if all_data:
                     final_result = pd.concat(all_data, ignore_index=True, sort=False)
 
-                    # 删除全为空的行
-                    final_result.dropna(how='all', subset=standard_columns, inplace=True)
+                    # 删除全为空的行（排除数据源列）
+                    cols_for_check = [c for c in final_result.columns if c != '数据源']
+                    if cols_for_check:
+                        final_result.dropna(how='all', subset=cols_for_check, inplace=True)
                     final_result.reset_index(drop=True, inplace=True)
 
                     # ========== 显示结果 ==========
@@ -171,10 +261,12 @@ def render():
                     st.dataframe(final_result.head(20), use_container_width=True)
 
                     # 统计信息
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     col1.metric("总行数", len(final_result))
                     col2.metric("总列数", len(final_result.columns))
                     col3.metric("处理文件数", len(all_data))
+                    matched_count = len(final_result[final_result['数据源'].notna() & (final_result['数据源'] != '')])
+                    col4.metric("已匹配Sheet数", matched_count)
 
                     # 下载按钮
                     st.subheader("📥 下载结果")
@@ -274,7 +366,72 @@ def build_mapping(mapping_df):
     return alias_to_standard, standard_columns
 
 
-def process_single_file(df, filename, alias_to_standard, standard_columns, province_name=""):
+def build_info_dict(info_book_sheets, selected_sheets, standard_columns):
+    """
+    从信息匹配数据簿构建匹配字典（仅保留第一列列名匹配标准列的Sheet）
+
+    Args:
+        info_book_sheets: dict, {sheet_name: DataFrame}
+        selected_sheets: list, 用户选择的sheet名称列表
+        standard_columns: list, 映射表的标准列名列表
+
+    Returns:
+        info_dict: dict, {sheet_name: {'key_col': 第一列列名, 'info_cols': [补充列列表], 'mapping': {关键字值: {列名: 值}}}}
+        info_columns: list, 需要补充的列名列表（不含关键字列）
+    """
+    info_dict = {}
+    info_columns = []
+
+    for sheet_name in selected_sheets:
+        if sheet_name not in info_book_sheets:
+            continue
+
+        df = info_book_sheets[sheet_name].copy()
+        if df.empty or len(df.columns) < 2:
+            continue
+
+        # 清理列名（去除首尾空格）
+        df.columns = [str(col).strip() for col in df.columns]
+
+        # 第一列作为关键字列
+        key_col = df.columns[0]
+
+        # 【关键】检查第一列列名是否在标准列中
+        if key_col not in standard_columns:
+            # 不匹配，跳过
+            continue
+
+        info_cols = list(df.columns[1:])
+
+        # 初始化sheet的字典
+        info_dict[sheet_name] = {
+            'key_col': key_col,  # 这个列名就是标准列名
+            'info_cols': info_cols,
+            'mapping': {}
+        }
+
+        # 收集所有信息列
+        for col in info_cols:
+            if col not in info_columns:
+                info_columns.append(col)
+
+        # 构建关键字到行的映射（第一列的值作为关键字）
+        for _, row in df.iterrows():
+            key_val = row[key_col]
+            if pd.isna(key_val):
+                continue
+
+            key_str = str(key_val).strip()
+            if key_str:
+                info_dict[sheet_name]['mapping'][key_str] = {
+                    col: row[col] for col in info_cols
+                }
+
+    return info_dict, info_columns
+
+
+def process_single_file(df, filename, alias_to_standard, standard_columns,
+                        info_dict=None, info_columns=None):
     """
     处理单个数据文件
 
@@ -283,12 +440,14 @@ def process_single_file(df, filename, alias_to_standard, standard_columns, provi
         filename: 文件名
         alias_to_standard: 别名映射
         standard_columns: 标准列列表
-        province_name: 省份名称
+        info_dict: 信息匹配字典
+        info_columns: 需要补充的列名列表
 
     Returns:
-        处理后的 DataFrame, 问题列表
+        处理后的 DataFrame, 匹配的sheet名称列表, 问题列表
     """
     issues = []
+    matched_sheet = None
 
     # 处理重复列名
     if df.columns.duplicated().any():
@@ -310,7 +469,7 @@ def process_single_file(df, filename, alias_to_standard, standard_columns, provi
     # 空数据检查
     if df.empty:
         issues.append('无数据')
-        return None, issues
+        return None, None, issues
 
     # 列名映射
     cols = list(df.columns)
@@ -349,24 +508,14 @@ def process_single_file(df, filename, alias_to_standard, standard_columns, provi
     missing = [c for c in standard_columns if c not in df_renamed.columns]
 
     # 关键列检查
-    key_missing = [c for c in ['产品名称'] if c in missing]
-    if key_missing:
-        issues.append(f'缺关键列: {key_missing}')
+    if missing:
+        issues.append(f'缺关键列: {missing}')
 
     # 构建输出 DataFrame
     df_selected = pd.DataFrame(index=df.index)
 
     if matched:
         df_selected = df_renamed[[c for c in matched]].copy()
-
-    # 添加省份列
-    if province_name:
-        df_selected.insert(0, '省份', province_name)
-    elif '省份' in standard_columns:
-        # 尝试从文件名提取省份
-        province = extract_province_from_filename(filename)
-        if province:
-            df_selected.insert(0, '省份', province)
 
     # 补全缺失的标准列
     for c in standard_columns:
@@ -375,29 +524,86 @@ def process_single_file(df, filename, alias_to_standard, standard_columns, provi
 
     # 确保列顺序
     output_columns = [c for c in standard_columns if c in df_selected.columns]
-    if '省份' in df_selected.columns:
-        output_columns = ['省份'] + [c for c in output_columns if c != '省份']
 
-    df_selected = df_selected[output_columns]
+    # 信息匹配：根据Sheet第一列的列名（即标准列名）去匹配
+    if info_dict:
+        matched_sheet = match_info(df_selected, info_dict, info_columns)
+    else:
+        matched_sheet = None
 
-    return df_selected, issues
+    # 补充信息列（如果存在的话）
+    if info_columns:
+        for col in info_columns:
+            if col not in df_selected.columns:
+                df_selected[col] = np.nan
+
+    # 确保输出列包含：标准列 + 信息匹配列
+    output_columns_with_info = output_columns.copy()
+    for col in info_columns:
+        if col not in output_columns_with_info:
+            output_columns_with_info.append(col)
+
+    df_selected = df_selected[output_columns_with_info]
+
+    return df_selected, matched_sheet, issues
 
 
-def extract_province_from_filename(filename):
-    """从文件名提取省份名称"""
-    # 常见省份关键词
-    provinces = [
-        '北京', '天津', '河北', '山西', '内蒙古',
-        '辽宁', '吉林', '黑龙江',
-        '上海', '江苏', '浙江', '安徽', '福建', '江西', '山东',
-        '河南', '湖北', '湖南', '广东', '广西', '海南',
-        '重庆', '四川', '贵州', '云南', '西藏',
-        '陕西', '甘肃', '青海', '宁夏', '新疆',
-        '台湾', '香港', '澳门'
-    ]
+def match_info(df, info_dict, info_columns):
+    """
+    根据Sheet第一列的列名（标准列名）去匹配对应列的信息
 
-    for p in provinces:
-        if p in filename:
-            return p
+    Args:
+        df: DataFrame（已映射为标准列）
+        info_dict: 信息匹配字典（key_col就是标准列名）
+        info_columns: 需要补充的列名列表
 
-    return ""
+    Returns:
+        匹配的sheet名称列表
+    """
+    matched_sheets = []
+
+    # 首先清理列名（去除首尾空格）
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # 按sheet顺序匹配
+    for sheet_name, sheet_data in info_dict.items():
+        key_col_name = sheet_data['key_col']  # 这就是标准列名（如"项目名称"）
+        mapping = sheet_data['mapping']
+        info_cols = sheet_data['info_cols']
+
+        # 检查数据表是否有对应的标准列
+        if key_col_name not in df.columns:
+            continue
+
+        sheet_matched = False
+
+        # 遍历每行，用标准列的值去信息匹配表中查找
+        for idx, row in df.iterrows():
+            key_val = row[key_col_name]
+            if pd.isna(key_val):
+                continue
+
+            # 清理关键字（去除首尾空格）
+            key_str = str(key_val).strip()
+
+            # 在信息匹配表中查找（精确匹配）
+            if key_str in mapping:
+                # 找到匹配，补充信息
+                for col in info_cols:
+                    if col in df.columns:
+                        # 如果该列已有值，不覆盖
+                        if pd.isna(df.at[idx, col]):
+                            df.at[idx, col] = mapping[key_str][col]
+                    else:
+                        # 添加新列
+                        df[col] = np.nan
+                        df.at[idx, col] = mapping[key_str][col]
+
+                sheet_matched = True
+
+        if sheet_matched:
+            matched_sheets.append(sheet_name)
+
+    # 返回匹配的sheet名称列表（逗号分隔）
+    return ', '.join(matched_sheets) if matched_sheets else None
+
