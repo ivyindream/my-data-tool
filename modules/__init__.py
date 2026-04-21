@@ -10,7 +10,7 @@ MODULES = {
         'icon': '📋',
         'module': 'modules.data_merger',
         'function': 'render',
-        'admin_only': True  # 管理员专属模块
+        'admin_only': False  # 如果是Ture则是管理员专属模块，修改了，唉
     },
     # 【新增模块示例】
     # 'new_module': {
