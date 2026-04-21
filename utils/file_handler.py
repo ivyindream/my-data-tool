@@ -80,6 +80,36 @@ def excel_to_bytes_multi_sheet(sheets: dict, filename: str) -> bytes:
     return buffer.getvalue()
 
 
+def excel_to_df_multi_sheet(data: bytes, filename: str) -> dict:
+    """
+    将Excel文件的多个sheet读取为字典
+
+    Args:
+        data: 文件字节数据
+        filename: 文件名
+
+    Returns:
+        dict, {sheet_name: DataFrame}
+    """
+    buffer = io.BytesIO(data)
+    ext = filename.lower().split('.')[-1]
+
+    if ext not in ('xlsx', 'xls'):
+        raise ValueError(f"不支持的格式: {ext}")
+
+    engine = 'openpyxl' if ext == 'xlsx' else 'xlrd'
+
+    # 读取所有sheet
+    xl = pd.ExcelFile(buffer, engine=engine)
+    sheets = {}
+
+    for sheet_name in xl.sheet_names:
+        buffer.seek(0)
+        sheets[sheet_name] = pd.read_excel(buffer, sheet_name=sheet_name, engine=engine)
+
+    return sheets
+
+
 def detect_format(data: bytes) -> str:
     """
     检测字节数据的 Excel 格式
